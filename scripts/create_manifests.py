@@ -1,6 +1,6 @@
 import json
 import random
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 import tarfile
 
@@ -40,11 +40,11 @@ def collect_samples(language):
 
         common_ids = sorted(set(json_members) & set(wav_members))
 
-        for utt_id in common_ids:
-            json_member = json_members[utt_id]
-            wav_member = wav_members[utt_id]
+        with tarfile.open(shard_path, "r") as tar:
+            for utt_id in common_ids:
+                json_member = json_members[utt_id]
+                wav_member = wav_members[utt_id]
 
-            with tarfile.open(shard_path, "r") as tar:
                 file_obj = tar.extractfile(json_member)
 
                 if file_obj is None:
@@ -54,30 +54,32 @@ def collect_samples(language):
 
                 metadata = json.load(file_obj)
 
-            if metadata.get("lang") != language:
-                raise ValueError(
-                    f"Language mismatch: expected {language}, "
-                    f"got {metadata.get('lang')}"
+                if metadata.get("lang") != language:
+                    raise ValueError(
+                        f"Language mismatch: expected {language}, "
+                        f"got {metadata.get('lang')}"
+                    )
+
+                if metadata.get("utt_id") != utt_id:
+                    raise ValueError(
+                        f"utt_id mismatch: {metadata.get('utt_id')} != {utt_id}"
+                    )
+
+                source_id = utt_id.split("__U__", 1)[0]
+
+                relative_shard = shard_path.relative_to(RAW_DATA_DIR)
+
+                samples.append(
+                    {
+                        "utt_id": utt_id,
+                        "language": language,
+                        "label_id": LANGUAGE_TO_ID[language],
+                        "source_id": source_id,
+                        "shard_path": relative_shard.as_posix(),
+                        "wav_member": wav_member.name,
+                        "json_member": json_member.name,
+                    }
                 )
-
-            if metadata.get("utt_id") != utt_id:
-                raise ValueError(
-                    f"utt_id mismatch: {metadata.get('utt_id')} != {utt_id}"
-                )
-
-            source_id = utt_id.split("__U__", 1)[0]
-
-            samples.append(
-                {
-                    "utt_id": utt_id,
-                    "language": language,
-                    "label_id": LANGUAGE_TO_ID[language],
-                    "source_id": source_id,
-                    "shard_path": str(shard_path.resolve()),
-                    "wav_member": wav_member.name,
-                    "json_member": json_member.name,
-                }
-            )
 
     return samples
 
@@ -142,6 +144,24 @@ def print_summary(split_name, samples):
     print(f"Unique sources   : {len(source_counts):,}")
 
 
+def verify_no_source_overlap(train, valid, test):
+    train_sources = {x["source_id"] for x in train}
+    valid_sources = {x["source_id"] for x in valid}
+    test_sources = {x["source_id"] for x in test}
+
+    train_valid = train_sources & valid_sources
+    train_test = train_sources & test_sources
+    valid_test = valid_sources & test_sources
+
+    if train_valid or train_test or valid_test:
+        raise RuntimeError("SOURCE LEAKAGE DETECTED!")
+
+    print("\nSOURCE LEAKAGE CHECK PASSED")
+    print(f"Train n Valid : {len(train_valid)}")
+    print(f"Train n Test  : {len(train_test)}")
+    print(f"Valid n Test  : {len(valid_test)}")
+
+
 def main():
     print("=" * 70)
     print("SOURCE-GROUPED MANIFEST GENERATOR")
@@ -185,6 +205,8 @@ def main():
     print_summary("train", all_train)
     print_summary("valid", all_valid)
     print_summary("test", all_test)
+
+    verify_no_source_overlap(all_train, all_valid, all_test)
 
     print("\n" + "=" * 70)
     print("MANIFEST GENERATION COMPLETE")
