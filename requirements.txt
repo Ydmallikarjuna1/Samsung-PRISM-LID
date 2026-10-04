@@ -1,0 +1,9 @@
+torch==2.14.1
+torchaudio
+numpy==2.4.6
+scipy
+soundfile
+pandas
+tqdm
+webdataset
+huggingface_hub
